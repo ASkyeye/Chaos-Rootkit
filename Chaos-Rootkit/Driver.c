@@ -282,22 +282,53 @@ NTSTATUS WINAPI FakeNtCreateFile(
 
 DWORD initializehooklist(Phooklist hooklist_s, fopera rfileinfo, int Option)
 {
-    if (!hooklist_s || !rfileinfo.filename || (!rfileinfo.rpid && Option == 1) )
+    if (!hooklist_s || !rfileinfo.filename || (!rfileinfo.rpid && Option == 1))
     {
         DbgPrint("invalid structure provided \n");
         return (-1);
 
     }
 
-    if (hooklist_s->NtCreateFileAddress == (uintptr_t)&FakeNtCreateFile && Option == 1)
+    if ((uintptr_t)hooklist_s->NtCreateFileHookAddress == (uintptr_t)&FakeNtCreateFile && Option == 1 && \
+        hooklist_s->pID == rfileinfo.rpid)
     {
         DbgPrint("Hook already active for function 1\n");
-        return (-1);
+        return (STATUS_UNSUCCESSFUL);
     }
-    else if (hooklist_s->NtCreateFileAddress == (uintptr_t)&FakeNtCreateFile2 && Option == 2)
+    else if ((uintptr_t)hooklist_s->NtCreateFileHookAddress == (uintptr_t)&FakeNtCreateFile2 && Option == 2)
     {
         DbgPrint("Hook already active for function 2\n");
+        return (STATUS_UNSUCCESSFUL);
+    }
+
+    if (Option == 1)
+    {
+        DbgPrint("allowing PID  \n", rfileinfo.rpid);
+        hooklist_s->pID = rfileinfo.rpid;
+
+        hooklist_s->NtCreateFileHookAddress = (uintptr_t)&FakeNtCreateFile;
+    }
+    else if (Option == 2)
+        hooklist_s->NtCreateFileHookAddress = (uintptr_t)&FakeNtCreateFile2;
+
+    memcpy(hooklist_s->NtCreateFilePatch + 2, &hooklist_s->NtCreateFileHookAddress, sizeof(void*));
+
+    RtlCopyMemory(hooklist_s->filename, rfileinfo.filename, sizeof(rfileinfo.filename));
+
+    write_to_read_only_memory(hooklist_s->NtCreateFileAddress, &hooklist_s->NtCreateFilePatch, sizeof(hooklist_s->NtCreateFilePatch));
+
+    DbgPrint("Hooks installed \n");
+
+    return (0);
+}
+
+DWORD InitializeStructure(Phooklist hooklist_s)
+{
+    if (!hooklist_s )
+    {
+        DbgPrint("invalid structure provided \n");
         return (-1);
+
     }
 
     UNICODE_STRING NtCreateFile_STRING = RTL_CONSTANT_STRING(L"NtCreateFile");
@@ -344,28 +375,10 @@ DWORD initializehooklist(Phooklist hooklist_s, fopera rfileinfo, int Option)
 
     DbgPrint("NtOpenFile resolved\n");
 
-    if (Option == 1)
-        hooklist_s->NtCreateFileHookAddress = (uintptr_t)&FakeNtCreateFile;
-    else if (Option == 2)
-        hooklist_s->NtCreateFileHookAddress = (uintptr_t)&FakeNtCreateFile2;
+
+    DbgPrint("taking a copy before hook.. \n");
     
-
-    memcpy(hooklist_s->NtCreateFilePatch + 2, &hooklist_s->NtCreateFileHookAddress, sizeof(void*));
-
-
-    if (hooklist_s->takeCopy == 0)
-    {
-        DbgPrint("taking a copy before hook.. \n");
-        memcpy(hooklist_s->NtCreateFileOrigin, hooklist_s->NtCreateFileAddress, 12);
-        hooklist_s->takeCopy = 69;
-    }
-    hooklist_s->pID = rfileinfo.rpid;
-
-    RtlCopyMemory(hooklist_s->filename, rfileinfo.filename, sizeof(rfileinfo.filename));
-
-    write_to_read_only_memory(hooklist_s->NtCreateFileAddress, &hooklist_s->NtCreateFilePatch, sizeof(hooklist_s->NtCreateFilePatch));
-
-    DbgPrint("Hooks installed \n");
+    memcpy(hooklist_s->NtCreateFileOrigin, hooklist_s->NtCreateFileAddress, 12);
 
     return (0);
 }
@@ -767,7 +780,7 @@ NTSTATUS processIoctlRequest(
                 break;
             }
 
-            case RESTRICT_ACCESS_TO_FILE_CTL:
+            case RESTRICT_ACCESS_TO_FILE_CTL :
             {
                 if (pstack->Parameters.DeviceIoControl.InputBufferLength < sizeof(fopera))
                 {
@@ -1003,6 +1016,8 @@ DriverEntry(
 
     UNREFERENCED_PARAMETER(registryPath);
     UNREFERENCED_PARAMETER(driverObject);
+
+    InitializeStructure(&xHooklist);
 
     NTSTATUS status = IoCreateDevice(driverObject, 0, &DeviceName, FILE_DEVICE_UNKNOWN, METHOD_BUFFERED, FALSE, &driverObject->DeviceObject);
 
