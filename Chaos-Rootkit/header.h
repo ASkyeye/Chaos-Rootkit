@@ -30,7 +30,8 @@ UNICODE_STRING SymbName = RTL_CONSTANT_STRING(L"\\??\\KDChaos");
 const char* PsGetProcessImageFileName(PEPROCESS Process);
 
 EX_PUSH_LOCK pLock;
-
+#define STATUS_ALREADY_EXISTS ((NTSTATUS)0xB7)
+#define ERROR_UNSUPPORTED_OFFSET ((NTSTATUS)0x00000233)
 wchar_t* to_free;
 typedef struct foperationx {
     int rpid;
